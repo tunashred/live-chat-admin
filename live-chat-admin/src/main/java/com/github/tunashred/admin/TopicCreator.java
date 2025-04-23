@@ -73,7 +73,8 @@ public class TopicCreator {
         log.error("Timed out while waiting for topic '" + topicName + "' to appear for " + timeoutMs + " ms");
     }
 
-    public static void deleteTopic(String topicName) {
+    public static Boolean deleteTopic(String topicName) {
+        Boolean success = false;
         try {
             Properties adminProps = loadProperties("admin.properties");
             Admin admin = Admin.create(adminProps);
@@ -81,7 +82,7 @@ public class TopicCreator {
             DeleteTopicsResult result = admin.deleteTopics(Collections.singleton(topicName));
             KafkaFuture<Void> future = result.all();
             future.get();
-            waitUntilTopicDeleted((AdminClient) admin, topicName);
+            success = waitUntilTopicDeleted((AdminClient) admin, topicName);
 
             log.info("Topic " + topicName + " deleted successfully");
         } catch (IOException e) {
@@ -94,9 +95,10 @@ public class TopicCreator {
         } catch (Exception e) {
             log.warn("Exception occured while waiting for the topic to be deleted");
         }
+        return success;
     }
 
-    private static void waitUntilTopicDeleted(AdminClient admin, String topicName) throws Exception {
+    private static Boolean waitUntilTopicDeleted(AdminClient admin, String topicName) throws Exception {
         final int timeoutMs = 10_000;
         long start = System.currentTimeMillis();
         long end = start + timeoutMs;
@@ -104,7 +106,7 @@ public class TopicCreator {
             try {
                 Set<String> topics = admin.listTopics().names().get();
                 if (!topics.contains(topicName)) {
-                    return;
+                    return true;
                 }
             } catch (Exception e) {
                 log.error("Exception occured while waiting for topic '" + topicName + "' to be deleted");
@@ -112,6 +114,7 @@ public class TopicCreator {
             Thread.sleep(1000);
         }
         log.error("Timed out while waiting for topic '" + topicName + "' to be deleted, for " + timeoutMs + " ms");
+        return false;
     }
 
     private static Properties loadProperties(String filePath) throws IOException {
