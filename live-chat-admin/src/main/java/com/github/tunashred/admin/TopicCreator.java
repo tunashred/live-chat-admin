@@ -13,20 +13,36 @@ import java.util.concurrent.ExecutionException;
 public class TopicCreator {
 
     public static String createPackTopic(String topicName) throws IOException {
-        String topic = "pack-" + topicName;
-        if (!isValidKafkaTopicName(topic)) {
-            log.error("Provided topic name does not follow rules of pack topics");
+        String topic = packanizeTopicName(topicName);
+        if (isInvalidKafkaTopicName(topic)) {
+            log.error("Provided topic name does not follow the rules of pack topics");
             return null;
         }
 
         return createTopic(topic, loadProperties("pack_topic.properties"));
     }
 
+    private static String packanizeTopicName(String topicName) {
+        if (!topicName.startsWith("pack-")) {
+            return "pack-" + topicName;
+        }
+        return topicName;
+    }
+
+    public static boolean deletePackTopic(String topicName) {
+        String topic = packanizeTopicName(topicName);
+        if (isInvalidKafkaTopicName(topic)) {
+            log.error("Provided topic name does not follow the rules of pack topics");
+            return false;
+        }
+        return deleteTopic(topic);
+    }
+
     public static String createTopic(String topicName) throws IOException {
         return createTopic(topicName, new Properties());
     }
 
-    public static String createTopic(String topicName, Properties topicProps) throws IOException {
+    public static String createTopic(String topicName, Properties topicProps) {
         try {
             Properties adminProps = loadProperties("admin.properties");
             Admin admin = Admin.create(adminProps);
@@ -43,11 +59,11 @@ public class TopicCreator {
 
             future.get();
             waitUntilTopicExists((AdminClient) admin, topicName);
-            log.info("Topic " + topicName + " created successfully!");
+            log.info("Topic {} created successfully!", topicName);
 
             return topicName;
         } catch (IOException e) {
-            log.error("Unable to load admin properties from file.");
+            log.error("Unable to load admin properties from file: ", e);
         } catch (ExecutionException e) {
             log.error("Exception occured while trying to create topic: ", e);
         } catch (InterruptedException e) {
@@ -63,42 +79,45 @@ public class TopicCreator {
         long end = start + timeoutMs;
 
         while (System.currentTimeMillis() < end) {
-            ListTopicsResult topics = admin.listTopics();
-            Set<String> names = topics.names().get();
-            if (names.contains(topicName)) {
+            if (topicExists(admin, topicName)) {
                 return;
             }
             Thread.sleep(1000);
         }
-        log.error("Timed out while waiting for topic '" + topicName + "' to appear for " + timeoutMs + " ms");
+        log.error("Timed out while waiting for topic '{}' to appear for " + timeoutMs + " ms", topicName);
     }
 
-    public static Boolean deleteTopic(String topicName) {
-        Boolean success = false;
+    public static boolean deleteTopic(String topicName) {
+        boolean success = false;
         try {
             Properties adminProps = loadProperties("admin.properties");
             Admin admin = Admin.create(adminProps);
+
+            if (!topicExists((AdminClient) admin, topicName)) {
+                log.error("Topic '{}' does not exist", topicName);
+                return false;
+            }
 
             DeleteTopicsResult result = admin.deleteTopics(Collections.singleton(topicName));
             KafkaFuture<Void> future = result.all();
             future.get();
             success = waitUntilTopicDeleted((AdminClient) admin, topicName);
 
-            log.info("Topic " + topicName + " deleted successfully");
+            log.info("Topic {} deleted successfully", topicName);
         } catch (IOException e) {
-            log.error("Unable to load admin properties from file.");
+            log.error("Unable to load admin properties from file: ", e);
         } catch (ExecutionException e) {
             log.error("Exception occured while trying to delete topic: ", e);
         } catch (InterruptedException e) {
             log.warn("Operation interrupted: ", e);
             Thread.currentThread().interrupt();
         } catch (Exception e) {
-            log.warn("Exception occured while waiting for the topic to be deleted");
+            log.warn("Exception occured while waiting for the topic to be deleted: ", e);
         }
         return success;
     }
 
-    private static Boolean waitUntilTopicDeleted(AdminClient admin, String topicName) throws Exception {
+    private static boolean waitUntilTopicDeleted(AdminClient admin, String topicName) throws Exception {
         final int timeoutMs = 10_000;
         long start = System.currentTimeMillis();
         long end = start + timeoutMs;
@@ -109,11 +128,11 @@ public class TopicCreator {
                     return true;
                 }
             } catch (Exception e) {
-                log.error("Exception occured while waiting for topic '" + topicName + "' to be deleted");
+                log.error("Exception occured while waiting for topic '{}' to be deleted", topicName, e);
             }
             Thread.sleep(1000);
         }
-        log.error("Timed out while waiting for topic '" + topicName + "' to be deleted, for " + timeoutMs + " ms");
+        log.error("Timed out while waiting for topic '{}' to be deleted, for " + timeoutMs + " ms", topicName);
         return false;
     }
 
@@ -124,23 +143,32 @@ public class TopicCreator {
     private static Properties loadProperties(String filePath, Properties properties) throws IOException {
         Properties props = new Properties();
         ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
-        try (InputStream input = classLoader.getResourceAsStream(filePath)) {
-            props.load(input);
+        try (InputStream propsFile = TopicCreator.class.getClassLoader().getResourceAsStream(filePath)) {
+            if (propsFile == null) {
+                log.error("Cannot find {} in classpath", filePath);
+            }
+            props.load(propsFile);
             props.putAll(properties);
         }
         return props;
     }
 
-    private static boolean isValidKafkaTopicName(String name) {
+    private static boolean isInvalidKafkaTopicName(String name) {
         if (name == null || name.isEmpty()) {
-            return false;
+            return true;
         }
         if (name.equals(".") || name.equals("..")) {
-            return false;
+            return true;
         }
         if (name.length() > 249) {
-            return false;
+            return true;
         }
-        return name.matches("[a-zA-Z0-9._-]+");
+        return !name.matches("[a-zA-Z0-9._-]+");
+    }
+
+    private static boolean topicExists(AdminClient admin, String topic) throws ExecutionException, InterruptedException {
+        ListTopicsResult topics = admin.listTopics();
+        Set<String> names = topics.names().get();
+        return names.contains(topic);
     }
 }
